@@ -100,8 +100,8 @@ Các service giao tiếp qua Docker network `internal` bằng tên service (`red
 ## Part 3: Cloud Deployment
 
 ### Exercise 3.1 / 3.2: Deploy Agent Part 6 lên Cloud
-- **Platform chính:** [TODO: Railway hoặc Render]
-- **Public URL:** `[TODO: https://...]`
+- **Platform chính:** Render (Web Service + Key Value Redis)
+- **Public URL:** `https://k5-l3a-day14-nguyenkhackhanh-2a202603472.onrender.com`
 - **Screenshots:** `screenshots/dashboard.png`, `screenshots/running.png`, `screenshots/test.png`
 
 ### So sánh `railway.toml` vs `render.yaml`

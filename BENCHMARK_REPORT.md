@@ -84,28 +84,30 @@ Không tăng tuyến tính mãi: từ `c=1` lên `c=10` và `c=50`, RPS tăng m�
 
 | # | Thay đổi | Alert nào firing | Thời gian từ lúc đổi → firing | Panel nào phản ánh rõ nhất |
 |---|---|---|---|---|
-| A | `MOCK_ERROR_RATE=0.2` | | | |
-| B | `MOCK_SLOW_RATE=0.3` | | | |
-| C | `LLM_MODEL=mock-llm-large` | | | |
-| D | `docker pause` 1 instance | | | |
-| E | `AGENT_VERSION=v1` | | | |
+| A | `MOCK_ERROR_RATE=0.2` | `AgentHighErrorRate` | ~88s | Error rate, LLM calls ok/error |
+| B | `MOCK_SLOW_RATE=0.3` | [TODO nếu chạy thêm: `AgentHighLatencyP95`] | [TODO] | Latency p50/p95/p99 |
+| C | `LLM_MODEL=mock-llm-large` | `LLMCostBurnRateHigh` | ~88s–120s (cùng lúc với A) | Cost USD/giờ, LLM p95 |
+| D | `docker pause` 1 instance | [TODO nếu chạy thêm: `AgentInstanceDown`] | [TODO] | Instances up |
+| E | `AGENT_VERSION=v1` | Không có alert nào firing | N/A | Retrieval hit ratio mất, tokens/s giảm |
 
 **Thí nghiệm E không làm alert nào firing. Bạn sẽ phát hiện loại sự cố này trong production bằng cách nào?**
 
-...
+Các metric hạ tầng (RPS, HTTP 5xx, latency) vẫn hoàn toàn bình thường vì agent vẫn trả HTTP 200. Để phát hiện suy giảm chất lượng, cần chạy **eval định kỳ trên golden dataset** (trong CI/CD trước deploy và scheduled eval trên production), theo dõi các chỉ số đặc thù như `retrieval hit ratio`, hoặc dùng **LLM-as-a-judge / user feedback** (thumbs up/down) trên một tỷ lệ traffic mẫu.
 
 ### 4.3 Debug bằng trace
 
-Chọn 1 trace chậm nhất bạn tìm được:
-
-- `trace_id`: ...
-- Tổng thời gian: ... ms
-- Span chiếm nhiều thời gian nhất: ... (... ms, ...%)
-- Dòng log tương ứng (grep theo `trace_id`):
+- **Ví dụ trace lỗi (`llm_error`) tìm được từ log JSON:**
+  - `trace_id`: `101bd469f5a29d8374a7361f598f17cf`
+  - Dòng log tương ứng:
 
 ```json
-
+{"ts": "2026-11-25T10:17:46.894561+00:00", "level": "INFO", "service": "observable-agent", "instance": "d1421da4c872", "event": "llm_error", "trace_id": "101bd469f5a29d8374a7361f598f17cf", "span_id": "26f064147656fcf0", "request_id": "348d28753bf9", "error": "Upstream LLM error: 503 Service Unavailable (mock)"}
 ```
+
+- **Trace chậm nhất trong Jaeger (`Longest First`):**
+  - `trace_id`: `f1d7a7237a28472228a82ec929d1ea4a`
+  - Tổng thời gian: `509 ms`
+  - Span chiếm nhiều thời gian nhất: `chat mock-llm-large` (`481 ms, 94.5%`)
 
 ---
 
@@ -113,21 +115,20 @@ Chọn 1 trace chậm nhất bạn tìm được:
 
 | Số instance | RPS | p50 (ms) | p95 (ms) | p99 (ms) | Failures |
 |---|---|---|---|---|---|
-| 1 | | | | | |
-| 3 | | | | | |
+| 1 | 61.84 | 200 | 1300 | 2000 | 65 (0.89%) |
+| 3 | 64.55 | 200 | 460 | 1700 | 62 (0.81%) |
 
 **Giải thích kết quả:** Scale có cải thiện p95 không? Nút thắt nằm ở đâu?
 
-...
+Scale từ 1 lên 3 instance cải thiện **rất rõ p95** (giảm gần 3 lần từ `1300 ms → 460 ms`) vì tải 100 user được Nginx chia đều qua 3 container nên giảm hàng đợi ở từng process. Tuy nhiên `p50` giữ nguyên (`200 ms`) và tổng `RPS` chỉ tăng nhẹ (`61.84 → 64.55 req/s`) vì nút thắt thời gian xử lý mỗi request nằm ở **độ trễ gọi LLM** (`MOCK_LATENCY_MS` + `MOCK_RETRIEVAL_MS`), việc thêm replica không làm LLM trả lời nhanh hơn mà chỉ giúp tránh nghẽn khi nhiều user đồng thời.
 
 ---
 
 ## 6. Kết luận
 
 - 3 điều bạn học được về benchmark & observability:
-  1. ...
-  2. ...
-  3. ...
+  1. Latency trung bình che giấu tail latency; SLO và cảnh báo hiệu năng phải đặt theo `p95`/`p99`.
+  2. Eval trên golden dataset + quality gate trong CI là bắt buộc vì metric hạ tầng xanh không đảm bảo agent trả lời đúng (ví dụ chuyển `v2 → v1`).
+  3. 3 trụ cột Metrics (Prometheus/Grafana) – Traces (OpenTelemetry/Jaeger) – Logs (JSON có `trace_id`) liên kết chặt chẽ giúp tìm đúng nguyên nhân gốc rễ (LLM chậm/lỗi vs code).
 - Nếu đưa agent này lên production thật, bạn sẽ thêm metric / alert nào nữa?
-
-...
+  - Thêm alert **Cost budget theo ngày/tháng** gần chạm ngưỡng (80%, 95%), metric **Redis latency / connection errors**, **retrieval hit rate** (cảnh báo khi tỷ lệ tìm thấy tài liệu tụt bất thường), và **scheduled eval accuracy** trên golden dataset.
